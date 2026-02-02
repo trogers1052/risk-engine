@@ -74,6 +74,7 @@ class TestRiskAdapter:
 
         mock_md_instance = MagicMock()
         mock_md_instance.connect.return_value = True
+        mock_md_instance.get_max_correlation_with_portfolio.return_value = (None, 0.0)
         mock_market_data.return_value = mock_md_instance
 
         mock_rules_client.return_value.connect.return_value = True
