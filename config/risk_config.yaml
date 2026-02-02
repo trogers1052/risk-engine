@@ -1,0 +1,58 @@
+# Risk Engine Configuration
+
+# Redis connection for portfolio state
+redis_host: "localhost"
+redis_port: 6379
+redis_db: 0
+redis_positions_key: "robinhood:positions"
+
+# TimescaleDB connection for historical data
+timescale_host: "localhost"
+timescale_port: 5432
+timescale_db: "market_data"
+timescale_user: "postgres"
+timescale_password: ""
+
+# Position Sizing Configuration
+position_sizing:
+  method: "atr"                    # "atr" or "kelly"
+  risk_per_trade_pct: 0.02         # 2% risk per trade
+  atr_multiplier: 2.0              # Stop distance = ATR * multiplier
+  max_position_pct: 0.20           # Maximum 20% of portfolio per position
+  kelly_fraction: 0.25             # Fractional Kelly (25% of optimal)
+
+# Portfolio Risk Limits
+portfolio_risk:
+  max_concentration_pct: 0.20      # Max 20% in any single position
+  max_correlation: 0.80            # Reject if correlation > 80% with existing
+  max_total_exposure_pct: 0.95     # Keep at least 5% cash
+  min_cash_pct: 0.05               # Minimum cash buffer
+
+# Value at Risk Configuration
+var:
+  enabled: true
+  confidence: 0.95                 # 95% confidence level
+  max_var_daily_pct: 0.05          # Max 5% daily VaR
+  max_cvar_daily_pct: 0.08         # Max 8% daily CVaR
+  lookback_days: 252               # 1 year of trading days
+
+# Trade-Level Risk Checks
+trade_risk:
+  max_atr_pct: 0.05                # Reject if ATR > 5% of price
+  require_above_sma200: true       # BUY only above 200 SMA
+  min_volume_pct: 0.50             # Minimum 50% of average volume
+
+# Symbol-Specific Overrides
+symbol_overrides:
+  MP:
+    max_position_pct: 0.15         # High volatility - smaller position
+    max_atr_pct: 0.08              # Allow higher volatility
+  IAUM:
+    max_position_pct: 0.25         # Stable ETF - larger position allowed
+    require_above_sma200: false    # Skip trend filter for gold ETF
+  SPY:
+    max_position_pct: 0.30         # Index ETF - larger position allowed
+    max_atr_pct: 0.03              # Tighter volatility for index
+
+# Logging
+log_level: "INFO"
