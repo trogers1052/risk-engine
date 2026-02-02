@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
-from pydantic import Field
+from pydantic import Field, ConfigDict
 from pydantic_settings import BaseSettings
 
 
@@ -80,9 +80,10 @@ class RiskSettings(BaseSettings):
     # Logging
     log_level: str = Field(default="INFO")
 
-    class Config:
-        env_prefix = "RISK_"
-        env_nested_delimiter = "__"
+    model_config = ConfigDict(
+        env_prefix="RISK_",
+        env_nested_delimiter="__",
+    )
 
     def get_symbol_config(
         self, symbol: str, key: str, default: Any = None

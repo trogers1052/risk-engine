@@ -42,12 +42,16 @@ class TestRiskAdapter:
         adapter = RiskAdapter(settings=settings)
         assert adapter._initialized is False
 
+    @patch("risk_engine.adapter.AlertPublisher")
+    @patch("risk_engine.adapter.RulesClient")
     @patch("risk_engine.adapter.PortfolioStateManager")
     @patch("risk_engine.adapter.MarketDataLoader")
-    def test_initialize(self, mock_market_data, mock_portfolio_manager, settings):
+    def test_initialize(self, mock_market_data, mock_portfolio_manager, mock_rules_client, mock_alert_publisher, settings):
         # Setup mocks
         mock_portfolio_manager.return_value.connect.return_value = True
         mock_market_data.return_value.connect.return_value = True
+        mock_rules_client.return_value.connect.return_value = True
+        mock_alert_publisher.return_value.connect.return_value = True
 
         adapter = RiskAdapter(settings=settings)
         result = adapter.initialize()
@@ -55,10 +59,12 @@ class TestRiskAdapter:
         assert result is True
         assert adapter._initialized is True
 
+    @patch("risk_engine.adapter.AlertPublisher")
+    @patch("risk_engine.adapter.RulesClient")
     @patch("risk_engine.adapter.PortfolioStateManager")
     @patch("risk_engine.adapter.MarketDataLoader")
     def test_check_risk_buy(
-        self, mock_market_data, mock_portfolio_manager, settings, portfolio
+        self, mock_market_data, mock_portfolio_manager, mock_rules_client, mock_alert_publisher, settings, portfolio
     ):
         # Setup mocks
         mock_pm_instance = MagicMock()
@@ -69,6 +75,9 @@ class TestRiskAdapter:
         mock_md_instance = MagicMock()
         mock_md_instance.connect.return_value = True
         mock_market_data.return_value = mock_md_instance
+
+        mock_rules_client.return_value.connect.return_value = True
+        mock_alert_publisher.return_value.connect.return_value = True
 
         adapter = RiskAdapter(settings=settings)
         adapter.initialize()
@@ -116,10 +125,12 @@ class TestRiskAdapter:
 
         assert result.passes is True
 
+    @patch("risk_engine.adapter.AlertPublisher")
+    @patch("risk_engine.adapter.RulesClient")
     @patch("risk_engine.adapter.PortfolioStateManager")
     @patch("risk_engine.adapter.MarketDataLoader")
     def test_get_portfolio_summary(
-        self, mock_market_data, mock_portfolio_manager, settings, portfolio
+        self, mock_market_data, mock_portfolio_manager, mock_rules_client, mock_alert_publisher, settings, portfolio
     ):
         # Setup mocks
         mock_pm_instance = MagicMock()
@@ -131,6 +142,9 @@ class TestRiskAdapter:
         mock_md_instance.connect.return_value = True
         mock_market_data.return_value = mock_md_instance
 
+        mock_rules_client.return_value.connect.return_value = True
+        mock_alert_publisher.return_value.connect.return_value = True
+
         adapter = RiskAdapter(settings=settings)
         adapter.initialize()
 
@@ -139,9 +153,11 @@ class TestRiskAdapter:
         assert "positions" in summary
         assert "total_equity" in summary
 
+    @patch("risk_engine.adapter.AlertPublisher")
+    @patch("risk_engine.adapter.RulesClient")
     @patch("risk_engine.adapter.PortfolioStateManager")
     @patch("risk_engine.adapter.MarketDataLoader")
-    def test_shutdown(self, mock_market_data, mock_portfolio_manager, settings):
+    def test_shutdown(self, mock_market_data, mock_portfolio_manager, mock_rules_client, mock_alert_publisher, settings):
         mock_pm_instance = MagicMock()
         mock_pm_instance.connect.return_value = True
         mock_portfolio_manager.return_value = mock_pm_instance
@@ -149,6 +165,14 @@ class TestRiskAdapter:
         mock_md_instance = MagicMock()
         mock_md_instance.connect.return_value = True
         mock_market_data.return_value = mock_md_instance
+
+        mock_rules_instance = MagicMock()
+        mock_rules_instance.connect.return_value = True
+        mock_rules_client.return_value = mock_rules_instance
+
+        mock_alert_instance = MagicMock()
+        mock_alert_instance.connect.return_value = True
+        mock_alert_publisher.return_value = mock_alert_instance
 
         adapter = RiskAdapter(settings=settings)
         adapter.initialize()

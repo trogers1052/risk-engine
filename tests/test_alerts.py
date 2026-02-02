@@ -19,6 +19,7 @@ class TestAlertPublisher:
         assert publisher.brokers == ["localhost:9092"]
         assert publisher.topic == "trading.risk-alerts"
 
+    @patch("risk_engine.alerts.publisher.HAS_KAFKA", False)
     def test_connect_no_kafka(self):
         """Test connect when kafka-python not installed."""
         # Since we're testing without kafka, connect should still succeed

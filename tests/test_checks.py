@@ -75,20 +75,22 @@ class TestPositionSizingCheck:
     def test_insufficient_buying_power(self, settings):
         check = PositionSizingCheck(settings)
 
-        # Portfolio with very low buying power
+        # Portfolio with enough equity for position size but low buying power
+        # Equity of 10000 allows max 2000 position (20%), price 100 = 20 shares
+        # But buying power of 50 means we can't afford even 1 share at $100
         small_portfolio = PortfolioState(
-            buying_power=10.0,
-            cash=10.0,
-            total_equity=1000.0,
+            buying_power=50.0,
+            cash=50.0,
+            total_equity=10000.0,
         )
 
         context = RiskCheckContext(
             symbol="MSFT",
             signal_type="BUY",
             confidence=0.8,
-            indicators={"close": 350.0, "atr_14": 7.0},
+            indicators={"close": 100.0, "atr_14": 2.0},
             portfolio=small_portfolio,
-            current_price=350.0,
+            current_price=100.0,
         )
 
         result = check.check(context)
