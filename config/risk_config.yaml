@@ -16,14 +16,14 @@ timescale_password: ""
 # Position Sizing Configuration
 position_sizing:
   method: "atr"                    # "atr" or "kelly"
-  risk_per_trade_pct: 0.02         # 2% risk per trade
+  risk_per_trade_pct: 0.015        # 1.5% risk per trade (tighter for sub-$2k accounts)
   atr_multiplier: 2.0              # Stop distance = ATR * multiplier
-  max_position_pct: 0.20           # Maximum 20% of portfolio per position
+  max_position_pct: 0.15           # Maximum 15% of portfolio per position (tighter for sub-$2k)
   kelly_fraction: 0.25             # Fractional Kelly (25% of optimal)
 
 # Portfolio Risk Limits
 portfolio_risk:
-  max_concentration_pct: 0.20      # Max 20% in any single position
+  max_concentration_pct: 0.15      # Max 15% in any single position (matches max_position_pct)
   max_correlation: 0.80            # Reject if correlation > 80% with existing
   max_total_exposure_pct: 0.95     # Keep at least 5% cash
   min_cash_pct: 0.05               # Minimum cash buffer
@@ -51,7 +51,7 @@ sector_groups:
 
 # Value at Risk Configuration
 var:
-  enabled: true
+  enabled: false                     # Disabled until account > $10k — assumes stationary returns, crude fallback
   confidence: 0.95                 # 95% confidence level
   max_var_daily_pct: 0.05          # Max 5% daily VaR
   max_cvar_daily_pct: 0.08         # Max 8% daily CVaR

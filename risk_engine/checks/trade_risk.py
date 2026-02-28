@@ -5,6 +5,7 @@ Evaluates volatility, trend alignment, and liquidity.
 """
 
 import logging
+import math
 from typing import List, Optional
 
 from ..config import RiskSettings
@@ -100,9 +101,17 @@ class TradeRiskCheck(RiskCheck):
             symbol, "max_atr_pct", self.settings.trade_risk.max_atr_pct
         )
 
+        # Sanitize NaN/Inf ATR values
+        if atr is not None and not math.isfinite(atr):
+            warnings.append("ATR is NaN/Inf — treating as unavailable")
+            atr = None
+
         if atr is None:
             # Try to get ATR percentage directly
             atr_pct = context.atr_pct
+            if atr_pct is not None and not math.isfinite(atr_pct):
+                warnings.append("ATR percentage is NaN/Inf — treating as unavailable")
+                atr_pct = None
             if atr_pct is None:
                 warnings.append("ATR not available for volatility check")
                 return None
