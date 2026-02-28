@@ -54,8 +54,10 @@ class RiskChecker:
         # Trade-level risk (first line of defense)
         checks.append(TradeRiskCheck(self.settings, self.market_data))
 
-        # Portfolio-level risk
-        checks.append(PortfolioRiskCheck(self.settings, self.market_data))
+        # Portfolio-level risk (with portfolio manager for peak equity tracking)
+        checks.append(PortfolioRiskCheck(
+            self.settings, self.market_data, self.portfolio_manager
+        ))
 
         # VaR/CVaR check (if enabled)
         if self.settings.var.enabled:

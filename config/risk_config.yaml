@@ -27,6 +27,27 @@ portfolio_risk:
   max_correlation: 0.80            # Reject if correlation > 80% with existing
   max_total_exposure_pct: 0.95     # Keep at least 5% cash
   min_cash_pct: 0.05               # Minimum cash buffer
+  max_open_positions: 5            # Max concurrent open positions
+  max_sector_exposure_pct: 0.40    # Max 40% of portfolio in any one sector
+  drawdown_threshold_pct: 0.10     # 10% drawdown from peak triggers size reduction
+  drawdown_size_reduction: 0.50    # Halve position sizes when in drawdown
+
+# Sector Groups — symbols grouped by correlated sector
+# Used for sector concentration limits
+sector_groups:
+  uranium:
+    - CCJ
+    - URNM
+    - UUUU
+  precious_metals:
+    - WPM
+    - SLV
+    - IAUM
+    - PPLT
+  industrial:
+    - CAT
+  rare_earth:
+    - MP
 
 # Value at Risk Configuration
 var:

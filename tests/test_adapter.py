@@ -70,6 +70,7 @@ class TestRiskAdapter:
         mock_pm_instance = MagicMock()
         mock_pm_instance.connect.return_value = True
         mock_pm_instance.get_portfolio_state.return_value = portfolio
+        mock_pm_instance.get_peak_equity.return_value = portfolio.total_equity
         mock_portfolio_manager.return_value = mock_pm_instance
 
         mock_md_instance = MagicMock()

@@ -4,7 +4,7 @@ Risk engine configuration.
 
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
 from pydantic import Field, ConfigDict
@@ -28,6 +28,10 @@ class PortfolioRiskConfig(BaseSettings):
     max_correlation: float = 0.80
     max_total_exposure_pct: float = 0.95
     min_cash_pct: float = 0.05
+    max_open_positions: int = 5
+    max_sector_exposure_pct: float = 0.40
+    drawdown_threshold_pct: float = 0.10
+    drawdown_size_reduction: float = 0.50
 
 
 class VaRConfig(BaseSettings):
@@ -77,6 +81,9 @@ class RiskSettings(BaseSettings):
     # Symbol-specific overrides
     symbol_overrides: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
 
+    # Sector groupings for concentration limits
+    sector_groups: Dict[str, List[str]] = Field(default_factory=dict)
+
     # Logging
     log_level: str = Field(default="INFO")
 
@@ -94,6 +101,13 @@ class RiskSettings(BaseSettings):
             if key in override:
                 return override[key]
         return default
+
+    def get_sector_for_symbol(self, symbol: str) -> Optional[str]:
+        """Look up which sector a symbol belongs to."""
+        for sector, symbols in self.sector_groups.items():
+            if symbol in symbols:
+                return sector
+        return None
 
     def get_max_position_pct(self, symbol: str) -> float:
         """Get max position percentage for a symbol."""
@@ -157,6 +171,9 @@ class RiskSettings(BaseSettings):
 
         if "symbol_overrides" in yaml_config:
             result["symbol_overrides"] = yaml_config["symbol_overrides"]
+
+        if "sector_groups" in yaml_config:
+            result["sector_groups"] = yaml_config["sector_groups"]
 
         return result
 

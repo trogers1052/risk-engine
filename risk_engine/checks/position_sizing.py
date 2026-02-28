@@ -77,6 +77,17 @@ class PositionSizingCheck(RiskCheck):
 
         recommended_shares, dollar_amount, risk_score = result
 
+        # Apply drawdown circuit breaker reduction (set by portfolio risk check)
+        drawdown_reduction = context.metadata.get("drawdown_size_reduction")
+        if drawdown_reduction and drawdown_reduction > 0:
+            multiplier = 1.0 - drawdown_reduction
+            recommended_shares = int(recommended_shares * multiplier)
+            dollar_amount = recommended_shares * price
+            warnings.append(
+                f"Position sized down by {drawdown_reduction:.0%} "
+                f"due to drawdown circuit breaker"
+            )
+
         # Apply maximum position limit
         max_position_pct = self.settings.get_max_position_pct(context.symbol)
         max_dollar_amount = portfolio.total_equity * max_position_pct

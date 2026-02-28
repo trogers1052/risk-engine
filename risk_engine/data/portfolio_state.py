@@ -171,3 +171,28 @@ class PortfolioStateManager:
         """Check if we have a position in a symbol."""
         state = self.get_portfolio_state()
         return state.has_position(symbol)
+
+    # ------------------------------------------------------------------
+    # Peak equity tracking for drawdown circuit breaker
+    # ------------------------------------------------------------------
+
+    PEAK_EQUITY_KEY = "risk:peak_equity"
+
+    def get_peak_equity(self, current_equity: float) -> float:
+        """Get peak equity, updating Redis if current equity is a new high.
+
+        Returns the higher of stored peak or current equity.
+        If Redis is unavailable, returns current equity (fail-open).
+        """
+        if not self._redis:
+            return current_equity
+        try:
+            stored = self._redis.get(self.PEAK_EQUITY_KEY)
+            peak = float(stored) if stored else 0.0
+            if current_equity > peak:
+                self._redis.set(self.PEAK_EQUITY_KEY, str(current_equity))
+                return current_equity
+            return peak
+        except redis.RedisError as e:
+            logger.warning(f"Redis error reading peak equity: {e}")
+            return current_equity

@@ -59,6 +59,7 @@ class TestRiskChecker:
         # Mock portfolio manager to return our test portfolio
         mock_portfolio_manager = MagicMock()
         mock_portfolio_manager.get_portfolio_state.return_value = portfolio
+        mock_portfolio_manager.get_peak_equity.return_value = portfolio.total_equity
 
         checker = RiskChecker(
             settings=settings,
@@ -78,6 +79,7 @@ class TestRiskChecker:
     def test_check_high_volatility_fails(self, settings, portfolio):
         mock_portfolio_manager = MagicMock()
         mock_portfolio_manager.get_portfolio_state.return_value = portfolio
+        mock_portfolio_manager.get_peak_equity.return_value = portfolio.total_equity
 
         checker = RiskChecker(
             settings=settings,
@@ -104,6 +106,7 @@ class TestRiskChecker:
     def test_check_below_sma_fails(self, settings, portfolio):
         mock_portfolio_manager = MagicMock()
         mock_portfolio_manager.get_portfolio_state.return_value = portfolio
+        mock_portfolio_manager.get_peak_equity.return_value = portfolio.total_equity
 
         checker = RiskChecker(
             settings=settings,
@@ -130,6 +133,7 @@ class TestRiskChecker:
     def test_check_convenience_methods(self, settings, portfolio, indicators):
         mock_portfolio_manager = MagicMock()
         mock_portfolio_manager.get_portfolio_state.return_value = portfolio
+        mock_portfolio_manager.get_peak_equity.return_value = portfolio.total_equity
 
         checker = RiskChecker(
             settings=settings,
@@ -155,6 +159,7 @@ class TestRiskChecker:
     def test_risk_metrics_aggregation(self, settings, portfolio, indicators):
         mock_portfolio_manager = MagicMock()
         mock_portfolio_manager.get_portfolio_state.return_value = portfolio
+        mock_portfolio_manager.get_peak_equity.return_value = portfolio.total_equity
 
         checker = RiskChecker(
             settings=settings,
