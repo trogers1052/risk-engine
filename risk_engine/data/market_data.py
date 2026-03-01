@@ -157,7 +157,7 @@ class MarketDataLoader:
 
         df = pd.DataFrame(returns_dict)
         # Forward fill then back fill to align dates
-        df = df.fillna(method="ffill").fillna(method="bfill")
+        df = df.ffill().bfill()
         return df
 
     def get_correlation_matrix(

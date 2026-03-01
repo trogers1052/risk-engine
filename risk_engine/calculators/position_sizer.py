@@ -5,6 +5,7 @@ Implements ATR-based and Kelly criterion position sizing methods.
 """
 
 import logging
+import math
 from dataclasses import dataclass
 from typing import Optional
 
@@ -181,7 +182,7 @@ class PositionSizer:
             mean_return = returns.mean()
             variance = returns.var()
 
-            if variance <= 0:
+            if not math.isfinite(variance) or variance <= 0:
                 return None
 
             # Kelly fraction

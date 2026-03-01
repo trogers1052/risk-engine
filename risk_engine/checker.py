@@ -5,6 +5,7 @@ Coordinates all risk checks and produces final risk assessment.
 """
 
 import logging
+import math
 from typing import Dict, List, Optional
 
 from .checks.base import RiskCheck, RiskCheckContext
@@ -247,6 +248,9 @@ class RiskChecker:
         if "atr_pct" in metrics:
             max_atr = self.settings.trade_risk.max_atr_pct
             scores.append(metrics["atr_pct"] / max_atr)
+
+        # Filter out NaN/Inf values that can propagate from bad indicator data
+        scores = [s for s in scores if math.isfinite(s)]
 
         if not scores:
             return 0.5

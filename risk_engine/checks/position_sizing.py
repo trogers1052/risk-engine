@@ -5,6 +5,7 @@ Calculates recommended position size using ATR-based or Kelly methods.
 """
 
 import logging
+import math
 from typing import List, Optional
 
 from ..config import RiskSettings
@@ -155,7 +156,7 @@ class PositionSizingCheck(RiskCheck):
         price = context.price
         portfolio = context.portfolio
 
-        if atr is None or atr <= 0:
+        if atr is None or not math.isfinite(atr) or atr <= 0:
             warnings.append("ATR not available, cannot calculate position size")
             return None
 
