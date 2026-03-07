@@ -173,6 +173,34 @@ class PortfolioStateManager:
         return state.has_position(symbol)
 
     # ------------------------------------------------------------------
+    # Macro signals (VIX, HY spread) from context-service
+    # ------------------------------------------------------------------
+
+    def get_macro_signals(self) -> dict:
+        """Read VIX and HY spread from market:context (published by context-service).
+
+        Returns {"vix": float, "hy_spread": float} or empty dict on failure.
+        """
+        if not self._redis:
+            return {}
+        try:
+            raw = self._redis.get("market:context")
+            if not raw:
+                return {}
+            data = json.loads(raw)
+            macro = data.get("macro_signals", {})
+            result = {}
+            if macro.get("available"):
+                if "vix" in macro:
+                    result["vix"] = float(macro["vix"])
+                if "hy_spread" in macro:
+                    result["hy_spread"] = float(macro["hy_spread"])
+            return result
+        except (redis.RedisError, json.JSONDecodeError, ValueError, TypeError) as exc:
+            logger.warning(f"Failed to read macro signals from Redis: {exc}")
+            return {}
+
+    # ------------------------------------------------------------------
     # Peak equity tracking for drawdown circuit breaker
     # ------------------------------------------------------------------
 

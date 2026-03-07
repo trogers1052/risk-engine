@@ -114,9 +114,10 @@ class RiskChecker:
             current_price=current_price,
         )
 
-        logger.debug(
-            f"Running risk checks for {symbol} {signal_type} "
-            f"(confidence={confidence:.2f}, price=${current_price})"
+        logger.info(
+            f"Risk pipeline start: {symbol} {signal_type} "
+            f"(confidence={confidence:.2f}, price=${current_price}, "
+            f"{len(self._checks)} checks)"
         )
 
         # Run checks
@@ -149,8 +150,8 @@ class RiskChecker:
             if check.name == "position_sizing":
                 position_result = result
 
-            logger.debug(
-                f"Check {check.name} passed for {symbol} "
+            logger.info(
+                f"Risk check {check.name} passed for {symbol} "
                 f"(risk_score={result.risk_score:.2f})"
             )
 

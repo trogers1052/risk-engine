@@ -89,6 +89,17 @@ class PositionSizingCheck(RiskCheck):
                 f"due to drawdown circuit breaker"
             )
 
+        # Apply capital temperature reduction (set by portfolio risk check)
+        temp_reduction = context.metadata.get("capital_temperature_reduction")
+        if temp_reduction and temp_reduction > 0:
+            multiplier = 1.0 - temp_reduction
+            recommended_shares = int(recommended_shares * multiplier)
+            dollar_amount = recommended_shares * price
+            warnings.append(
+                f"Position sized down by {temp_reduction:.0%} "
+                f"due to elevated capital temperature"
+            )
+
         # Apply maximum position limit
         max_position_pct = self.settings.get_max_position_pct(context.symbol)
         max_dollar_amount = portfolio.total_equity * max_position_pct

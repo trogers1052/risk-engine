@@ -30,8 +30,11 @@ class PortfolioRiskConfig(BaseSettings):
     min_cash_pct: float = 0.05
     max_open_positions: int = 5
     max_sector_exposure_pct: float = 0.40
+    max_portfolio_heat_pct: float = 0.08
+    max_sector_positions: int = 2
     drawdown_threshold_pct: float = 0.10
     drawdown_size_reduction: float = 0.50
+    drawdown_halt_pct: float = 0.15
 
 
 class VaRConfig(BaseSettings):
@@ -42,6 +45,19 @@ class VaRConfig(BaseSettings):
     max_var_daily_pct: float = 0.05
     max_cvar_daily_pct: float = 0.08
     lookback_days: int = 252
+
+
+class CapitalTemperatureConfig(BaseSettings):
+    """Capital temperature gauge configuration."""
+
+    enabled: bool = True
+    max_reduction: float = 0.30
+    vix_weight: float = 0.60
+    hy_spread_weight: float = 0.40
+    vix_floor: float = 15.0
+    vix_ceiling: float = 40.0
+    hy_floor: float = 3.5
+    hy_ceiling: float = 8.0
 
 
 class TradeRiskConfig(BaseSettings):
@@ -77,6 +93,9 @@ class RiskSettings(BaseSettings):
     )
     var: VaRConfig = Field(default_factory=VaRConfig)
     trade_risk: TradeRiskConfig = Field(default_factory=TradeRiskConfig)
+    capital_temperature: CapitalTemperatureConfig = Field(
+        default_factory=CapitalTemperatureConfig
+    )
 
     # Symbol-specific overrides
     symbol_overrides: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
@@ -115,6 +134,14 @@ class RiskSettings(BaseSettings):
             symbol,
             "max_position_pct",
             self.position_sizing.max_position_pct,
+        )
+
+    def get_risk_per_trade_pct(self, symbol: str) -> float:
+        """Get risk per trade for a symbol (check overrides, then default)."""
+        return self.get_symbol_config(
+            symbol,
+            "risk_per_trade_pct",
+            self.position_sizing.risk_per_trade_pct,
         )
 
     @classmethod
@@ -168,6 +195,11 @@ class RiskSettings(BaseSettings):
 
         if "trade_risk" in yaml_config:
             result["trade_risk"] = TradeRiskConfig(**yaml_config["trade_risk"])
+
+        if "capital_temperature" in yaml_config:
+            result["capital_temperature"] = CapitalTemperatureConfig(
+                **yaml_config["capital_temperature"]
+            )
 
         if "symbol_overrides" in yaml_config:
             result["symbol_overrides"] = yaml_config["symbol_overrides"]

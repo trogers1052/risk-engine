@@ -6,7 +6,7 @@ from risk_engine.checks.base import RiskCheckContext
 from risk_engine.checks.position_sizing import PositionSizingCheck
 from risk_engine.checks.portfolio_risk import PortfolioRiskCheck
 from risk_engine.checks.trade_risk import TradeRiskCheck
-from risk_engine.config import RiskSettings
+from risk_engine.config import PortfolioRiskConfig, RiskSettings
 from risk_engine.models.portfolio import Position, PortfolioState
 
 
@@ -302,8 +302,14 @@ class TestOpenPositionsCheck:
         result = check.check(context)
         assert result.passes is True
 
-    def test_warns_near_position_limit(self, settings):
+    def test_warns_near_position_limit(self):
         """Should warn when one away from max positions."""
+        # Use higher heat limit so heat check doesn't reject first
+        from risk_engine.config import PortfolioRiskConfig
+        test_settings = RiskSettings(
+            portfolio_risk=PortfolioRiskConfig(max_portfolio_heat_pct=0.20),
+        )
+
         # Create portfolio with 4 positions (max - 1)
         positions = {}
         for sym in ["AAPL", "GOOGL", "MSFT", "AMZN"]:
@@ -324,7 +330,7 @@ class TestOpenPositionsCheck:
             market_value=4400.0,
         )
 
-        check = PortfolioRiskCheck(settings)
+        check = PortfolioRiskCheck(test_settings)
         context = RiskCheckContext(
             symbol="TSLA",
             signal_type="BUY",
@@ -582,6 +588,58 @@ class TestDrawdownCircuitBreaker:
         assert context.metadata.get("drawdown_size_reduction") is None
         assert not any("drawdown active" in w.lower() for w in result.warnings)
 
+    def test_drawdown_halt_blocks_entries(self, settings):
+        """When drawdown exceeds halt threshold (15%), should reject."""
+        mock_pm = MagicMock()
+        # Peak was 10000, current is 8400 → 16% drawdown (> 15% halt)
+        mock_pm.get_peak_equity.return_value = 10000.0
+
+        portfolio = PortfolioState(
+            buying_power=8400.0,
+            cash=8400.0,
+            total_equity=8400.0,
+        )
+
+        check = PortfolioRiskCheck(settings, portfolio_manager=mock_pm)
+        context = RiskCheckContext(
+            symbol="MSFT",
+            signal_type="BUY",
+            confidence=0.8,
+            indicators={"close": 100.0},
+            portfolio=portfolio,
+            current_price=100.0,
+        )
+
+        result = check.check(context)
+        assert result.passes is False
+        assert "drawdown halt" in result.reason.lower()
+
+    def test_drawdown_between_thresholds_reduces_not_halts(self, settings):
+        """12% drawdown (between 10% and 15%) should reduce, not halt."""
+        mock_pm = MagicMock()
+        mock_pm.get_peak_equity.return_value = 10000.0
+
+        portfolio = PortfolioState(
+            buying_power=8800.0,
+            cash=8800.0,
+            total_equity=8800.0,
+        )
+
+        check = PortfolioRiskCheck(settings, portfolio_manager=mock_pm)
+        context = RiskCheckContext(
+            symbol="MSFT",
+            signal_type="BUY",
+            confidence=0.8,
+            indicators={"close": 100.0},
+            portfolio=portfolio,
+            current_price=100.0,
+        )
+
+        result = check.check(context)
+        assert result.passes is True
+        assert any("drawdown active" in w.lower() for w in result.warnings)
+        assert context.metadata.get("drawdown_size_reduction") == 0.50
+
     def test_no_portfolio_manager_skips_check(self, settings):
         """Without portfolio manager, uses current equity as peak (no drawdown)."""
         portfolio = PortfolioState(
@@ -603,6 +661,546 @@ class TestDrawdownCircuitBreaker:
         result = check.check(context)
         assert result.passes is True
         assert context.metadata.get("drawdown_size_reduction") is None
+
+
+class TestPortfolioHeatCheck:
+    """Tests for portfolio heat (total risk) check."""
+
+    def _settings_with_heat(self, max_heat=0.08):
+        """Create settings with heat limit."""
+        from risk_engine.config import PortfolioRiskConfig, PositionSizingConfig
+        return RiskSettings(
+            position_sizing=PositionSizingConfig(risk_per_trade_pct=0.015),
+            portfolio_risk=PortfolioRiskConfig(max_portfolio_heat_pct=max_heat),
+        )
+
+    def _portfolio_with_positions(self, symbols, total_equity=10000.0):
+        """Create portfolio with given symbols as positions."""
+        positions = {}
+        per_pos_value = total_equity * 0.10  # 10% each
+        for sym in symbols:
+            positions[sym] = Position(
+                symbol=sym,
+                shares=10,
+                average_cost=per_pos_value / 10,
+                current_price=per_pos_value / 10,
+                market_value=per_pos_value,
+                unrealized_pnl=0,
+                unrealized_pnl_pct=0,
+            )
+        market_value = per_pos_value * len(symbols)
+        return PortfolioState(
+            positions=positions,
+            buying_power=total_equity - market_value,
+            cash=total_equity - market_value,
+            total_equity=total_equity,
+            market_value=market_value,
+        )
+
+    def test_heat_within_limit(self):
+        """3 positions at 1.5% = 4.5% + new 1.5% = 6% < 8% → PASS."""
+        settings = self._settings_with_heat(0.08)
+        portfolio = self._portfolio_with_positions(["AAPL", "GOOGL", "MSFT"])
+        check = PortfolioRiskCheck(settings)
+
+        context = RiskCheckContext(
+            symbol="AMZN",
+            signal_type="BUY",
+            confidence=0.8,
+            indicators={"close": 100.0},
+            portfolio=portfolio,
+            current_price=100.0,
+        )
+
+        result = check.check(context)
+        assert result.passes is True
+
+    def test_heat_exceeds_limit(self):
+        """4 positions at 1.5% = 6% + new 1.5% = 7.5% > 7% limit → REJECT."""
+        settings = self._settings_with_heat(0.07)
+        portfolio = self._portfolio_with_positions(
+            ["AAPL", "GOOGL", "MSFT", "AMZN"]
+        )
+        check = PortfolioRiskCheck(settings)
+
+        context = RiskCheckContext(
+            symbol="META",
+            signal_type="BUY",
+            confidence=0.8,
+            indicators={"close": 100.0},
+            portfolio=portfolio,
+            current_price=100.0,
+        )
+
+        result = check.check(context)
+        assert result.passes is False
+        assert "heat" in result.reason.lower()
+
+    def test_heat_with_reduced_risk_symbols(self):
+        """MP at 0.75% risk counts less toward heat."""
+        settings = self._settings_with_heat(0.08)
+        settings = RiskSettings(
+            position_sizing=settings.position_sizing,
+            portfolio_risk=settings.portfolio_risk,
+            symbol_overrides={"MP": {"risk_per_trade_pct": 0.0075}},
+        )
+        # 4 positions: 3 at 1.5% + MP at 0.75% = 5.25% + new 1.5% = 6.75%
+        portfolio = self._portfolio_with_positions(
+            ["AAPL", "GOOGL", "MSFT", "MP"]
+        )
+        check = PortfolioRiskCheck(settings)
+
+        context = RiskCheckContext(
+            symbol="AMZN",
+            signal_type="BUY",
+            confidence=0.8,
+            indicators={"close": 100.0},
+            portfolio=portfolio,
+            current_price=100.0,
+        )
+
+        result = check.check(context)
+        assert result.passes is True
+
+    def test_heat_exactly_at_limit_passes(self):
+        """Projected heat exactly at limit (not >) → PASS."""
+        # 4 positions at 2% = 8%, adding 2% new = 10%
+        # But if we set risk at 1.6% and have 4: 6.4% + 1.6% = 8.0% exactly
+        from risk_engine.config import PortfolioRiskConfig, PositionSizingConfig
+        settings = RiskSettings(
+            position_sizing=PositionSizingConfig(risk_per_trade_pct=0.016),
+            portfolio_risk=PortfolioRiskConfig(max_portfolio_heat_pct=0.08),
+        )
+        portfolio = self._portfolio_with_positions(
+            ["AAPL", "GOOGL", "MSFT", "AMZN"]
+        )
+        check = PortfolioRiskCheck(settings)
+
+        context = RiskCheckContext(
+            symbol="META",
+            signal_type="BUY",
+            confidence=0.8,
+            indicators={"close": 100.0},
+            portfolio=portfolio,
+            current_price=100.0,
+        )
+
+        result = check.check(context)
+        # 0.08 is NOT > 0.08, so it passes
+        assert result.passes is True
+
+    def test_heat_empty_portfolio(self):
+        """0 positions → PASS."""
+        settings = self._settings_with_heat(0.08)
+        portfolio = PortfolioState(
+            buying_power=10000.0,
+            cash=10000.0,
+            total_equity=10000.0,
+        )
+        check = PortfolioRiskCheck(settings)
+
+        context = RiskCheckContext(
+            symbol="AAPL",
+            signal_type="BUY",
+            confidence=0.8,
+            indicators={"close": 100.0},
+            portfolio=portfolio,
+            current_price=100.0,
+        )
+
+        result = check.check(context)
+        assert result.passes is True
+
+    def test_heat_warning_near_limit(self):
+        """Projected heat near limit → PASS with warning."""
+        # 4 positions at 1.5% = 6% + new 1.5% = 7.5% — within 1% of 8%
+        settings = self._settings_with_heat(0.08)
+        portfolio = self._portfolio_with_positions(
+            ["AAPL", "GOOGL", "MSFT", "AMZN"]
+        )
+        check = PortfolioRiskCheck(settings)
+
+        context = RiskCheckContext(
+            symbol="META",
+            signal_type="BUY",
+            confidence=0.8,
+            indicators={"close": 100.0},
+            portfolio=portfolio,
+            current_price=100.0,
+        )
+
+        result = check.check(context)
+        assert result.passes is True
+        assert any("heat near limit" in w.lower() for w in result.warnings)
+
+
+class TestSectorPositionCount:
+    """Tests for sector position count limit."""
+
+    def _settings_with_sectors(self, max_sector_positions=2):
+        """Create settings with sector groups and position count limit."""
+        from risk_engine.config import PortfolioRiskConfig
+        return RiskSettings(
+            sector_groups={
+                "uranium": ["CCJ", "URNM", "UUUU"],
+                "precious_metals": ["WPM", "SLV", "IAUM", "PPLT"],
+                "industrial": ["CAT", "ETN"],
+            },
+            portfolio_risk=PortfolioRiskConfig(
+                max_sector_positions=max_sector_positions,
+                max_portfolio_heat_pct=1.0,  # disable heat check for these tests
+            ),
+        )
+
+    def test_sector_count_within_limit(self):
+        """1 uranium position + new CCJ = 2 → PASS."""
+        settings = self._settings_with_sectors()
+        positions = {
+            "URNM": Position(
+                symbol="URNM",
+                shares=100,
+                average_cost=30.0,
+                current_price=30.0,
+                market_value=3000.0,
+                unrealized_pnl=0,
+                unrealized_pnl_pct=0,
+            ),
+        }
+        portfolio = PortfolioState(
+            positions=positions,
+            buying_power=7000.0,
+            cash=7000.0,
+            total_equity=10000.0,
+            market_value=3000.0,
+        )
+
+        check = PortfolioRiskCheck(settings)
+        context = RiskCheckContext(
+            symbol="CCJ",
+            signal_type="BUY",
+            confidence=0.8,
+            indicators={"close": 50.0},
+            portfolio=portfolio,
+            current_price=50.0,
+        )
+
+        result = check.check(context)
+        assert result.passes is True
+
+    def test_sector_count_at_limit(self):
+        """2 uranium positions + new UUUU = 3 → REJECT."""
+        settings = self._settings_with_sectors()
+        positions = {
+            "CCJ": Position(
+                symbol="CCJ",
+                shares=50,
+                average_cost=50.0,
+                current_price=50.0,
+                market_value=2500.0,
+                unrealized_pnl=0,
+                unrealized_pnl_pct=0,
+            ),
+            "URNM": Position(
+                symbol="URNM",
+                shares=100,
+                average_cost=30.0,
+                current_price=30.0,
+                market_value=3000.0,
+                unrealized_pnl=0,
+                unrealized_pnl_pct=0,
+            ),
+        }
+        portfolio = PortfolioState(
+            positions=positions,
+            buying_power=50000.0,
+            cash=50000.0,
+            total_equity=55500.0,
+            market_value=5500.0,
+        )
+
+        check = PortfolioRiskCheck(settings)
+        context = RiskCheckContext(
+            symbol="UUUU",
+            signal_type="BUY",
+            confidence=0.8,
+            indicators={"close": 10.0},
+            portfolio=portfolio,
+            current_price=10.0,
+        )
+
+        result = check.check(context)
+        assert result.passes is False
+        assert "position limit" in result.reason.lower()
+        assert "uranium" in result.reason.lower()
+
+    def test_sector_count_different_sector(self):
+        """2 uranium positions + new CAT (industrial) → PASS."""
+        settings = self._settings_with_sectors()
+        positions = {
+            "CCJ": Position(
+                symbol="CCJ",
+                shares=50,
+                average_cost=50.0,
+                current_price=50.0,
+                market_value=2500.0,
+                unrealized_pnl=0,
+                unrealized_pnl_pct=0,
+            ),
+            "URNM": Position(
+                symbol="URNM",
+                shares=100,
+                average_cost=30.0,
+                current_price=30.0,
+                market_value=3000.0,
+                unrealized_pnl=0,
+                unrealized_pnl_pct=0,
+            ),
+        }
+        portfolio = PortfolioState(
+            positions=positions,
+            buying_power=50000.0,
+            cash=50000.0,
+            total_equity=55500.0,
+            market_value=5500.0,
+        )
+
+        check = PortfolioRiskCheck(settings)
+        context = RiskCheckContext(
+            symbol="CAT",
+            signal_type="BUY",
+            confidence=0.8,
+            indicators={"close": 300.0},
+            portfolio=portfolio,
+            current_price=300.0,
+        )
+
+        result = check.check(context)
+        assert result.passes is True
+
+    def test_sector_count_unmapped_symbol(self):
+        """Symbol not in any sector → PASS with warning."""
+        settings = self._settings_with_sectors()
+        portfolio = PortfolioState(
+            buying_power=50000.0,
+            cash=50000.0,
+            total_equity=50000.0,
+        )
+
+        check = PortfolioRiskCheck(settings)
+        context = RiskCheckContext(
+            symbol="XYZ",
+            signal_type="BUY",
+            confidence=0.8,
+            indicators={"close": 100.0},
+            portfolio=portfolio,
+            current_price=100.0,
+        )
+
+        result = check.check(context)
+        assert result.passes is True
+        assert any("no sector mapping" in w.lower() for w in result.warnings)
+
+    def test_sector_count_scale_in(self):
+        """Already hold CCJ, buying more CCJ → PASS (not a new position)."""
+        settings = self._settings_with_sectors()
+        positions = {
+            "CCJ": Position(
+                symbol="CCJ",
+                shares=50,
+                average_cost=50.0,
+                current_price=50.0,
+                market_value=2500.0,
+                unrealized_pnl=0,
+                unrealized_pnl_pct=0,
+            ),
+            "URNM": Position(
+                symbol="URNM",
+                shares=100,
+                average_cost=30.0,
+                current_price=30.0,
+                market_value=3000.0,
+                unrealized_pnl=0,
+                unrealized_pnl_pct=0,
+            ),
+        }
+        portfolio = PortfolioState(
+            positions=positions,
+            buying_power=50000.0,
+            cash=50000.0,
+            total_equity=55500.0,
+            market_value=5500.0,
+        )
+
+        check = PortfolioRiskCheck(settings)
+        context = RiskCheckContext(
+            symbol="CCJ",  # scale-in — already held
+            signal_type="BUY",
+            confidence=0.8,
+            indicators={"close": 50.0},
+            portfolio=portfolio,
+            current_price=50.0,
+        )
+
+        result = check.check(context)
+        assert result.passes is True
+
+    def test_existing_pct_check_still_works(self):
+        """% exposure check still rejects when appropriate."""
+        settings = self._settings_with_sectors(max_sector_positions=5)
+        # 1 position at 42% of equity — exceeds 40% sector limit
+        positions = {
+            "CCJ": Position(
+                symbol="CCJ",
+                shares=420,
+                average_cost=100.0,
+                current_price=100.0,
+                market_value=42000.0,
+                unrealized_pnl=0,
+                unrealized_pnl_pct=0,
+            ),
+        }
+        portfolio = PortfolioState(
+            positions=positions,
+            buying_power=58000.0,
+            cash=58000.0,
+            total_equity=100000.0,
+            market_value=42000.0,
+        )
+
+        check = PortfolioRiskCheck(settings)
+        context = RiskCheckContext(
+            symbol="URNM",
+            signal_type="BUY",
+            confidence=0.8,
+            indicators={"close": 50.0},
+            portfolio=portfolio,
+            current_price=50.0,
+        )
+
+        result = check.check(context)
+        assert result.passes is False
+        assert "exposure" in result.reason.lower()
+        assert "uranium" in result.reason.lower()
+
+
+class TestCapitalTemperature:
+    """Tests for capital temperature gauge."""
+
+    @staticmethod
+    def _make_check(vix=None, hy=None, enabled=True, **config_overrides):
+        """Create a PortfolioRiskCheck with mocked macro data."""
+        from risk_engine.config import CapitalTemperatureConfig
+
+        temp_config = CapitalTemperatureConfig(enabled=enabled, **config_overrides)
+        settings = RiskSettings(
+            capital_temperature=temp_config,
+            portfolio_risk=PortfolioRiskConfig(
+                max_portfolio_heat_pct=0.20,  # high to avoid heat rejection
+            ),
+        )
+
+        mock_pm = MagicMock()
+        macro = {}
+        if vix is not None:
+            macro["vix"] = vix
+        if hy is not None:
+            macro["hy_spread"] = hy
+        mock_pm.get_macro_signals.return_value = macro
+        mock_pm.get_peak_equity.return_value = 10000.0
+
+        check = PortfolioRiskCheck(settings, portfolio_manager=mock_pm)
+        return check
+
+    @staticmethod
+    def _make_context(portfolio=None):
+        if portfolio is None:
+            portfolio = PortfolioState(
+                buying_power=8000.0,
+                cash=8000.0,
+                total_equity=10000.0,
+                market_value=2000.0,
+            )
+        return RiskCheckContext(
+            symbol="MSFT",
+            signal_type="BUY",
+            confidence=0.8,
+            indicators={"close": 50.0},
+            portfolio=portfolio,
+            current_price=50.0,
+        )
+
+    def test_temperature_calm_market(self):
+        """VIX=12, HY=3.0 → temperature=0, no reduction."""
+        check = self._make_check(vix=12.0, hy=3.0)
+        context = self._make_context()
+
+        result = check.check(context)
+        assert result.passes is True
+        assert "capital_temperature_reduction" not in context.metadata
+        assert result.risk_metrics.get("capital_temperature", 0) == 0.0
+
+    def test_temperature_elevated_vix(self):
+        """VIX=30, HY=3.0 → reduction ~11%."""
+        check = self._make_check(vix=30.0, hy=3.0)
+        context = self._make_context()
+
+        result = check.check(context)
+        assert result.passes is True
+
+        # vix_score = (30-15)/25 = 0.6, hy_score = 0 (below floor)
+        # temperature = 0.6*0.6 + 0.4*0 = 0.36
+        # reduction = 0.36 * 0.30 = 0.108
+        reduction = context.metadata.get("capital_temperature_reduction", 0)
+        assert 0.10 <= reduction <= 0.12
+        assert any("capital temperature" in w.lower() for w in result.warnings)
+
+    def test_temperature_crisis(self):
+        """VIX=40, HY=8.0 → max reduction (30%)."""
+        check = self._make_check(vix=40.0, hy=8.0)
+        context = self._make_context()
+
+        result = check.check(context)
+        assert result.passes is True
+
+        # vix_score = 1.0, hy_score = 1.0
+        # temperature = 0.6*1.0 + 0.4*1.0 = 1.0
+        # reduction = 1.0 * 0.30 = 0.30
+        reduction = context.metadata.get("capital_temperature_reduction", 0)
+        assert abs(reduction - 0.30) < 0.01
+
+    def test_temperature_no_macro_data(self):
+        """No macro data → skipped with warning."""
+        check = self._make_check()
+        check.portfolio_manager.get_macro_signals.return_value = {}
+        context = self._make_context()
+
+        result = check.check(context)
+        assert result.passes is True
+        assert "capital_temperature_reduction" not in context.metadata
+        assert any("no macro data" in w.lower() for w in result.warnings)
+
+    def test_temperature_disabled(self):
+        """Disabled config → no temperature check."""
+        check = self._make_check(vix=40.0, hy=8.0, enabled=False)
+        context = self._make_context()
+
+        result = check.check(context)
+        assert result.passes is True
+        assert "capital_temperature_reduction" not in context.metadata
+
+    def test_temperature_vix_only(self):
+        """Only VIX available, no HY spread → uses VIX only."""
+        check = self._make_check(vix=30.0)
+        context = self._make_context()
+
+        result = check.check(context)
+        assert result.passes is True
+
+        # vix_score = 0.6, hy_score = 0 (not available)
+        # temperature = 0.6*0.6 = 0.36
+        # reduction = 0.36 * 0.30 = 0.108
+        reduction = context.metadata.get("capital_temperature_reduction", 0)
+        assert 0.10 <= reduction <= 0.12
 
 
 class TestPositionSizingWithDrawdown:
@@ -646,3 +1244,41 @@ class TestPositionSizingWithDrawdown:
         assert drawdown_result.passes is True
         assert drawdown_result.recommended_shares == int(normal_shares * 0.5)
         assert any("drawdown" in w.lower() for w in drawdown_result.warnings)
+
+    def test_temperature_reduces_position_size(self, settings):
+        """Position sizing should be reduced when temperature reduction is set."""
+        check = PositionSizingCheck(settings)
+
+        portfolio = PortfolioState(
+            buying_power=50000.0,
+            cash=50000.0,
+            total_equity=50000.0,
+        )
+
+        # Normal sizing first
+        normal_context = RiskCheckContext(
+            symbol="MSFT",
+            signal_type="BUY",
+            confidence=0.8,
+            indicators={"close": 100.0, "atr_14": 10.0},
+            portfolio=portfolio,
+            current_price=100.0,
+        )
+        normal_result = check.check(normal_context)
+        assert normal_result.passes is True
+        normal_shares = normal_result.recommended_shares
+
+        # Now with 20% temperature reduction
+        temp_context = RiskCheckContext(
+            symbol="MSFT",
+            signal_type="BUY",
+            confidence=0.8,
+            indicators={"close": 100.0, "atr_14": 10.0},
+            portfolio=portfolio,
+            current_price=100.0,
+            metadata={"capital_temperature_reduction": 0.20},
+        )
+        temp_result = check.check(temp_context)
+        assert temp_result.passes is True
+        assert temp_result.recommended_shares == int(normal_shares * 0.8)
+        assert any("capital temperature" in w.lower() for w in temp_result.warnings)
