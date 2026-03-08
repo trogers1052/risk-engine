@@ -54,6 +54,81 @@ class PortfolioRiskCheck(RiskCheck):
         """Need portfolio state."""
         return context.portfolio is not None
 
+    # Regime-aware limit adjustments.  In volatile or crisis markets,
+    # we tighten portfolio limits to reduce exposure.  In bear markets,
+    # we reduce position count.  These multiply against the configured
+    # base limits — they never loosen limits beyond the config defaults.
+    REGIME_ADJUSTMENTS: dict = {
+        "BULL": {},  # no changes
+        "SIDEWAYS": {},  # no changes
+        "BEAR": {
+            "max_open_positions_mult": 0.80,       # 5→4
+            "max_portfolio_heat_mult": 0.75,        # 8%→6%
+        },
+        "VOLATILE": {
+            "max_open_positions_mult": 0.60,       # 5→3
+            "max_portfolio_heat_mult": 0.625,       # 8%→5%
+            "max_correlation_mult": 0.75,           # 0.80→0.60
+            "max_sector_positions_mult": 0.50,      # 2→1
+        },
+        "CRISIS": {
+            "max_open_positions_mult": 0.40,       # 5→2
+            "max_portfolio_heat_mult": 0.50,        # 8%→4%
+            "max_correlation_mult": 0.625,          # 0.80→0.50
+            "max_sector_positions_mult": 0.50,      # 2→1
+        },
+    }
+
+    def _get_regime(self) -> str:
+        """Read current market regime from Redis via portfolio manager."""
+        if self.portfolio_manager is not None:
+            return self.portfolio_manager.get_regime()
+        return "UNKNOWN"
+
+    def _apply_regime_adjustments(
+        self, regime: str, warnings: List[str], risk_metrics: dict
+    ) -> None:
+        """Apply regime-aware multipliers to settings for this check run.
+
+        Stores adjusted values in risk_metrics so individual checks can read
+        them instead of accessing self.settings directly for the adjusted fields.
+        """
+        adjustments = self.REGIME_ADJUSTMENTS.get(regime, {})
+        base = self.settings.portfolio_risk
+
+        risk_metrics["regime"] = regime
+        risk_metrics["effective_max_positions"] = int(
+            base.max_open_positions
+            * adjustments.get("max_open_positions_mult", 1.0)
+        )
+        risk_metrics["effective_max_heat"] = (
+            base.max_portfolio_heat_pct
+            * adjustments.get("max_portfolio_heat_mult", 1.0)
+        )
+        risk_metrics["effective_max_correlation"] = (
+            base.max_correlation
+            * adjustments.get("max_correlation_mult", 1.0)
+        )
+        risk_metrics["effective_max_sector_positions"] = int(
+            base.max_sector_positions
+            * adjustments.get("max_sector_positions_mult", 1.0)
+        )
+        # Ensure minimums
+        risk_metrics["effective_max_positions"] = max(
+            1, risk_metrics["effective_max_positions"]
+        )
+        risk_metrics["effective_max_sector_positions"] = max(
+            1, risk_metrics["effective_max_sector_positions"]
+        )
+
+        if adjustments:
+            warnings.append(
+                f"Regime-adjusted limits ({regime}): "
+                f"positions={risk_metrics['effective_max_positions']}, "
+                f"heat={risk_metrics['effective_max_heat']:.1%}, "
+                f"correlation={risk_metrics['effective_max_correlation']:.2f}"
+            )
+
     def check(self, context: RiskCheckContext) -> RiskCheckResult:
         """Evaluate portfolio-level risk."""
         portfolio = context.portfolio
@@ -69,6 +144,10 @@ class PortfolioRiskCheck(RiskCheck):
 
         warnings: List[str] = []
         risk_metrics = {}
+
+        # Apply regime-aware limit adjustments
+        regime = self._get_regime()
+        self._apply_regime_adjustments(regime, warnings, risk_metrics)
 
         # Check 1: Max open positions
         pos_result = self._check_open_positions(context, warnings, risk_metrics)
@@ -163,7 +242,10 @@ class PortfolioRiskCheck(RiskCheck):
         risk_metrics: dict,
     ) -> Optional[RiskCheckResult]:
         """Check max concurrent open positions."""
-        max_positions = self.settings.portfolio_risk.max_open_positions
+        max_positions = risk_metrics.get(
+            "effective_max_positions",
+            self.settings.portfolio_risk.max_open_positions,
+        )
         current_count = context.portfolio.position_count
         risk_metrics["open_positions"] = current_count
         risk_metrics["max_positions"] = max_positions
@@ -196,7 +278,10 @@ class PortfolioRiskCheck(RiskCheck):
         so heat approximates the total capital at risk if all stops hit
         simultaneously.
         """
-        max_heat = self.settings.portfolio_risk.max_portfolio_heat_pct
+        max_heat = risk_metrics.get(
+            "effective_max_heat",
+            self.settings.portfolio_risk.max_portfolio_heat_pct,
+        )
         portfolio = context.portfolio
 
         # Sum the configured risk_per_trade for each open position
@@ -331,7 +416,10 @@ class PortfolioRiskCheck(RiskCheck):
         risk_metrics["sector_positions"] = len(held_in_sector)
 
         # Check position count limit
-        max_sector_positions = self.settings.portfolio_risk.max_sector_positions
+        max_sector_positions = risk_metrics.get(
+            "effective_max_sector_positions",
+            self.settings.portfolio_risk.max_sector_positions,
+        )
         # Don't count the candidate symbol if already held (scale-in)
         effective_count = len(held_in_sector)
         if symbol in held_in_sector:
@@ -388,7 +476,10 @@ class PortfolioRiskCheck(RiskCheck):
 
         portfolio = context.portfolio
         symbol = context.symbol
-        max_correlation = self.settings.portfolio_risk.max_correlation
+        max_correlation = risk_metrics.get(
+            "effective_max_correlation",
+            self.settings.portfolio_risk.max_correlation,
+        )
 
         # Get existing position symbols
         existing_symbols = [
