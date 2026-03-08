@@ -200,6 +200,24 @@ class PortfolioStateManager:
             logger.warning(f"Failed to read macro signals from Redis: {exc}")
             return {}
 
+    def get_regime(self) -> str:
+        """Read market regime from market:context (published by context-service).
+
+        Returns regime string (BULL/BEAR/SIDEWAYS/UNKNOWN).
+        Defaults to UNKNOWN on any failure (fail-open).
+        """
+        if not self._redis:
+            return "UNKNOWN"
+        try:
+            raw = self._redis.get("market:context")
+            if not raw:
+                return "UNKNOWN"
+            data = json.loads(raw)
+            return str(data.get("regime", "UNKNOWN")).upper()
+        except (redis.RedisError, json.JSONDecodeError, ValueError, TypeError) as exc:
+            logger.warning(f"Failed to read regime from Redis: {exc}")
+            return "UNKNOWN"
+
     # ------------------------------------------------------------------
     # Peak equity tracking for drawdown circuit breaker
     # ------------------------------------------------------------------
