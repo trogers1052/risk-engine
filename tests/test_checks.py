@@ -1282,3 +1282,139 @@ class TestPositionSizingWithDrawdown:
         assert temp_result.passes is True
         assert temp_result.recommended_shares == int(normal_shares * 0.8)
         assert any("capital temperature" in w.lower() for w in temp_result.warnings)
+
+
+class TestRegimeAwareLimits:
+    """Tests for regime-dependent portfolio risk limit adjustments."""
+
+    @staticmethod
+    def _make_check(regime="UNKNOWN", settings=None):
+        if settings is None:
+            settings = RiskSettings()
+
+        mock_pm = MagicMock()
+        mock_pm.get_regime.return_value = regime
+        mock_pm.get_macro_signals.return_value = {}
+        mock_pm.get_peak_equity.return_value = 10000.0
+
+        return PortfolioRiskCheck(settings, portfolio_manager=mock_pm)
+
+    @staticmethod
+    def _make_context(num_positions=0, equity=10000.0):
+        positions = {}
+        for i in range(num_positions):
+            sym = f"SYM{i}"
+            positions[sym] = Position(
+                symbol=sym,
+                shares=10,
+                average_cost=50.0,
+                current_price=50.0,
+                market_value=500.0,
+                unrealized_pnl=0.0,
+                unrealized_pnl_pct=0.0,
+            )
+        portfolio = PortfolioState(
+            buying_power=equity - num_positions * 500,
+            cash=equity - num_positions * 500,
+            total_equity=equity,
+            market_value=num_positions * 500,
+            positions=positions,
+        )
+        return RiskCheckContext(
+            symbol="NEWSTOCK",
+            signal_type="BUY",
+            confidence=0.8,
+            indicators={"close": 50.0},
+            portfolio=portfolio,
+            current_price=50.0,
+        )
+
+    def test_bull_regime_no_adjustment(self):
+        """BULL regime should use default limits."""
+        check = self._make_check(regime="BULL")
+        context = self._make_context(num_positions=0)
+        result = check.check(context)
+        assert result.passes is True
+        assert result.risk_metrics.get("effective_max_positions") == 5
+
+    def test_bear_regime_reduces_max_positions(self):
+        """BEAR regime should reduce max positions from 5 to 4."""
+        check = self._make_check(regime="BEAR")
+        context = self._make_context(num_positions=0)
+        result = check.check(context)
+        assert result.passes is True
+        assert result.risk_metrics.get("effective_max_positions") == 4
+
+    def test_volatile_regime_reduces_max_positions(self):
+        """VOLATILE regime should reduce max positions from 5 to 3."""
+        check = self._make_check(regime="VOLATILE")
+        context = self._make_context(num_positions=0)
+        result = check.check(context)
+        assert result.passes is True
+        assert result.risk_metrics.get("effective_max_positions") == 3
+
+    def test_crisis_regime_reduces_max_positions(self):
+        """CRISIS regime should reduce max positions from 5 to 2."""
+        check = self._make_check(regime="CRISIS")
+        context = self._make_context(num_positions=0)
+        result = check.check(context)
+        assert result.passes is True
+        assert result.risk_metrics.get("effective_max_positions") == 2
+
+    def test_volatile_regime_tightens_heat(self):
+        """VOLATILE regime should tighten heat from 8% to 5%."""
+        check = self._make_check(regime="VOLATILE")
+        context = self._make_context(num_positions=0)
+        result = check.check(context)
+        assert result.risk_metrics.get("effective_max_heat") == pytest.approx(
+            0.05, abs=0.001
+        )
+
+    def test_volatile_regime_tightens_correlation(self):
+        """VOLATILE regime should tighten correlation from 0.80 to 0.60."""
+        check = self._make_check(regime="VOLATILE")
+        context = self._make_context(num_positions=0)
+        result = check.check(context)
+        assert result.risk_metrics.get("effective_max_correlation") == pytest.approx(
+            0.60, abs=0.01
+        )
+
+    def test_volatile_blocks_at_3_positions(self):
+        """In VOLATILE, 3 positions should hit the reduced limit."""
+        check = self._make_check(regime="VOLATILE")
+        context = self._make_context(num_positions=3)
+        result = check.check(context)
+        assert result.passes is False
+        assert "positions" in result.reason.lower()
+
+    def test_bull_allows_4_positions(self):
+        """In BULL, 4 positions should pass position count check (max 5).
+
+        Uses lower risk_per_trade to keep portfolio heat under limit.
+        """
+        settings = RiskSettings()
+        settings.position_sizing.risk_per_trade_pct = 0.01  # 1% → 4 positions = 4% heat
+        check = self._make_check(regime="BULL", settings=settings)
+        context = self._make_context(num_positions=4, equity=50000.0)
+        result = check.check(context)
+        assert result.passes is True
+        # Verify position count is under the BULL limit of 5
+        assert result.risk_metrics["open_positions"] == 4
+        assert result.risk_metrics["max_positions"] == 5
+
+    def test_unknown_regime_uses_defaults(self):
+        """UNKNOWN regime should use default limits (no adjustment)."""
+        check = self._make_check(regime="UNKNOWN")
+        context = self._make_context(num_positions=0)
+        result = check.check(context)
+        assert result.risk_metrics.get("effective_max_positions") == 5
+        assert result.risk_metrics.get("effective_max_heat") == pytest.approx(
+            0.08, abs=0.001
+        )
+
+    def test_regime_adjustment_warning(self):
+        """Regime adjustments should emit a warning."""
+        check = self._make_check(regime="VOLATILE")
+        context = self._make_context(num_positions=0)
+        result = check.check(context)
+        assert any("regime-adjusted" in w.lower() for w in result.warnings)
