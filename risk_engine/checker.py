@@ -127,6 +127,20 @@ class RiskChecker:
 
         for check in self._checks:
             if not check.can_check(context):
+                if check.mandatory:
+                    reason = (
+                        f"Mandatory check '{check.name}' cannot run: "
+                        f"missing required data (fail-closed)"
+                    )
+                    logger.warning(f"Risk BLOCKED {symbol}: {reason}")
+                    return RiskCheckResult.reject(
+                        reason=reason,
+                        risk_score=1.0,
+                        check_name=check.name,
+                        symbol=symbol,
+                        warnings=all_warnings,
+                        risk_metrics=all_metrics,
+                    )
                 logger.debug(f"Skipping {check.name}: cannot evaluate")
                 all_warnings.append(f"{check.name} skipped: missing data")
                 continue

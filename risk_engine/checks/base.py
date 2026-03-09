@@ -115,6 +115,16 @@ class RiskCheck(ABC):
         """
         pass
 
+    @property
+    def mandatory(self) -> bool:
+        """Whether this check is mandatory (fail-closed when data missing).
+
+        Override to ``True`` for checks that must never be silently skipped.
+        When a mandatory check cannot run (``can_check`` returns False), the
+        risk pipeline rejects the signal instead of skipping the check.
+        """
+        return False
+
     def can_check(self, context: RiskCheckContext) -> bool:
         """
         Check if this risk check can be evaluated.

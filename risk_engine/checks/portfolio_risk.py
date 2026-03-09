@@ -50,6 +50,10 @@ class PortfolioRiskCheck(RiskCheck):
     def description(self) -> str:
         return "Check portfolio concentration, correlation, sector, and exposure limits"
 
+    @property
+    def mandatory(self) -> bool:
+        return True
+
     def can_check(self, context: RiskCheckContext) -> bool:
         """Need portfolio state."""
         return context.portfolio is not None
