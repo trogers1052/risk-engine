@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -241,3 +242,101 @@ class TestConvenienceMethods:
         manager._cache_time = datetime.utcnow()
         assert manager.has_position("AAPL") is True
         assert manager.has_position("MSFT") is False
+
+
+# ---------------------------------------------------------------------------
+# Peak equity tracking with file backup
+# ---------------------------------------------------------------------------
+
+
+class TestPeakEquity:
+    def test_new_high_updates_redis_and_file(self, manager, tmp_path):
+        """New equity high should write to both Redis and file backup."""
+        peak_file = tmp_path / "peak_equity"
+        manager._PEAK_EQUITY_FILE = str(peak_file)
+        manager._redis = MagicMock()
+        manager._redis.get.return_value = "900.0"
+
+        result = manager.get_peak_equity(1000.0)
+        assert result == 1000.0
+        manager._redis.set.assert_called_once_with("risk:peak_equity", "1000.0")
+        assert peak_file.exists()
+        assert float(peak_file.read_text().strip()) == 1000.0
+
+    def test_below_peak_returns_stored(self, manager, tmp_path):
+        """Equity below peak should return the stored peak, not current."""
+        peak_file = tmp_path / "peak_equity"
+        manager._PEAK_EQUITY_FILE = str(peak_file)
+        manager._redis = MagicMock()
+        manager._redis.get.return_value = "1200.0"
+
+        result = manager.get_peak_equity(1000.0)
+        assert result == 1200.0
+        manager._redis.set.assert_not_called()
+
+    def test_redis_down_falls_back_to_file(self, manager, tmp_path):
+        """When Redis is unavailable, should read peak from file backup."""
+        peak_file = tmp_path / "peak_equity"
+        peak_file.write_text("1500.0")
+        manager._PEAK_EQUITY_FILE = str(peak_file)
+        manager._redis = MagicMock()
+        manager._redis.get.side_effect = redis.RedisError("connection refused")
+
+        result = manager.get_peak_equity(1000.0)
+        assert result == 1500.0
+
+    def test_redis_down_new_high_still_writes_file(self, manager, tmp_path):
+        """When Redis is down but equity is new high, file should update."""
+        peak_file = tmp_path / "peak_equity"
+        peak_file.write_text("800.0")
+        manager._PEAK_EQUITY_FILE = str(peak_file)
+        manager._redis = MagicMock()
+        manager._redis.get.side_effect = redis.RedisError("connection refused")
+        manager._redis.set.side_effect = redis.RedisError("connection refused")
+
+        result = manager.get_peak_equity(1000.0)
+        assert result == 1000.0
+        assert float(peak_file.read_text().strip()) == 1000.0
+
+    def test_no_redis_no_file_returns_zero(self, manager, tmp_path):
+        """With no Redis and no file, _read_peak_equity returns 0.0."""
+        manager._PEAK_EQUITY_FILE = str(tmp_path / "nonexistent")
+        manager._redis = None
+
+        result = manager.get_peak_equity(500.0)
+        # 500 > 0.0, so it's a new high
+        assert result == 500.0
+
+    def test_corrupt_file_ignored(self, manager, tmp_path):
+        """Corrupt file backup should be ignored gracefully."""
+        peak_file = tmp_path / "peak_equity"
+        peak_file.write_text("not-a-number")
+        manager._PEAK_EQUITY_FILE = str(peak_file)
+        manager._redis = MagicMock()
+        manager._redis.get.return_value = None
+
+        result = manager.get_peak_equity(600.0)
+        # File corrupt, Redis empty → peak is 0.0, so 600 is new high
+        assert result == 600.0
+
+    def test_redis_empty_reads_file(self, manager, tmp_path):
+        """When Redis key doesn't exist, should fall back to file."""
+        peak_file = tmp_path / "peak_equity"
+        peak_file.write_text("2000.0")
+        manager._PEAK_EQUITY_FILE = str(peak_file)
+        manager._redis = MagicMock()
+        manager._redis.get.return_value = None  # Key doesn't exist
+
+        result = manager.get_peak_equity(1800.0)
+        assert result == 2000.0
+
+    def test_file_directory_created_automatically(self, manager, tmp_path):
+        """File backup should create parent directories if needed."""
+        peak_file = tmp_path / "subdir" / "deep" / "peak_equity"
+        manager._PEAK_EQUITY_FILE = str(peak_file)
+        manager._redis = MagicMock()
+        manager._redis.get.return_value = None
+
+        manager.get_peak_equity(750.0)
+        assert peak_file.exists()
+        assert float(peak_file.read_text().strip()) == 750.0

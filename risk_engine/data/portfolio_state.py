@@ -4,7 +4,9 @@ Portfolio state manager - loads current positions from Redis.
 
 import json
 import logging
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import redis
@@ -37,6 +39,7 @@ class PortfolioStateManager:
                 host=self.settings.redis_host,
                 port=self.settings.redis_port,
                 db=self.settings.redis_db,
+                password=self.settings.redis_password or None,
                 decode_responses=True,
             )
             # Test connection
@@ -223,22 +226,67 @@ class PortfolioStateManager:
     # ------------------------------------------------------------------
 
     PEAK_EQUITY_KEY = "risk:peak_equity"
+    _PEAK_EQUITY_FILE = os.environ.get(
+        "RISK_PEAK_EQUITY_FILE",
+        str(Path.home() / ".risk-engine" / "peak_equity"),
+    )
 
     def get_peak_equity(self, current_equity: float) -> float:
-        """Get peak equity, updating Redis if current equity is a new high.
+        """Get peak equity, updating Redis + file backup if current equity is a new high.
 
-        Returns the higher of stored peak or current equity.
-        If Redis is unavailable, returns current equity (fail-open).
+        Resolution order:
+        1. Redis (fast, primary)
+        2. Local file backup (survives Redis restart/eviction)
+        3. current_equity (fail-open last resort)
+
+        Both stores are updated when a new high is reached so they stay in sync.
         """
-        if not self._redis:
+        peak = self._read_peak_equity()
+        if current_equity > peak:
+            self._write_peak_equity(current_equity)
             return current_equity
+        return peak
+
+    def _read_peak_equity(self) -> float:
+        """Read peak equity from Redis, falling back to file backup."""
+        # Try Redis first
+        if self._redis:
+            try:
+                stored = self._redis.get(self.PEAK_EQUITY_KEY)
+                if stored:
+                    return float(stored)
+            except (redis.RedisError, ValueError) as e:
+                logger.warning(f"Redis error reading peak equity: {e}")
+
+        # Fall back to file backup
         try:
-            stored = self._redis.get(self.PEAK_EQUITY_KEY)
-            peak = float(stored) if stored else 0.0
-            if current_equity > peak:
-                self._redis.set(self.PEAK_EQUITY_KEY, str(current_equity))
-                return current_equity
-            return peak
-        except redis.RedisError as e:
-            logger.warning(f"Redis error reading peak equity: {e}")
-            return current_equity
+            path = Path(self._PEAK_EQUITY_FILE)
+            if path.exists():
+                value = float(path.read_text().strip())
+                logger.info(
+                    f"Peak equity loaded from file backup: ${value:.2f}"
+                )
+                return value
+        except (ValueError, OSError) as e:
+            logger.warning(f"File backup error reading peak equity: {e}")
+
+        return 0.0
+
+    def _write_peak_equity(self, value: float) -> None:
+        """Write peak equity to both Redis and file backup."""
+        # Write to Redis
+        if self._redis:
+            try:
+                self._redis.set(self.PEAK_EQUITY_KEY, str(value))
+            except redis.RedisError as e:
+                logger.warning(f"Redis error writing peak equity: {e}")
+
+        # Write to file backup (atomic via temp file + rename)
+        try:
+            path = Path(self._PEAK_EQUITY_FILE)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(str(value))
+            tmp.rename(path)
+        except OSError as e:
+            logger.warning(f"File backup error writing peak equity: {e}")

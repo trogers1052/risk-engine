@@ -75,6 +75,7 @@ class RiskSettings(BaseSettings):
     redis_host: str = Field(default="localhost")
     redis_port: int = Field(default=6379)
     redis_db: int = Field(default=0)
+    redis_password: Optional[str] = Field(default=None)
     redis_positions_key: str = Field(default="robinhood:positions")
 
     # TimescaleDB configuration
@@ -168,6 +169,7 @@ class RiskSettings(BaseSettings):
             "redis_host",
             "redis_port",
             "redis_db",
+            "redis_password",
             "redis_positions_key",
             "timescale_host",
             "timescale_port",

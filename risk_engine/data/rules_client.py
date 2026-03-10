@@ -44,6 +44,7 @@ class RulesClient:
                 host=self.settings.redis_host,
                 port=self.settings.redis_port,
                 db=self.settings.redis_db,
+                password=self.settings.redis_password or None,
                 decode_responses=True,
             )
             self._redis.ping()

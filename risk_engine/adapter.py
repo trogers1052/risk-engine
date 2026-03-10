@@ -5,6 +5,7 @@ Provides a simple interface for the decision-engine to call risk checks.
 """
 
 import logging
+import threading
 from typing import Dict, List, Optional
 
 from .checker import RiskChecker
@@ -407,6 +408,7 @@ class RiskAdapter:
 
 # Singleton instance for easy import
 _default_adapter: Optional[RiskAdapter] = None
+_adapter_lock = threading.Lock()
 
 
 def get_risk_adapter(
@@ -417,6 +419,7 @@ def get_risk_adapter(
     Get or create the default risk adapter instance.
 
     This provides a simple way to use the risk engine as a singleton.
+    Thread-safe via double-checked locking.
 
     Usage:
         from risk_engine.adapter import get_risk_adapter
@@ -427,6 +430,8 @@ def get_risk_adapter(
     global _default_adapter
 
     if _default_adapter is None:
-        _default_adapter = RiskAdapter(config_path, settings)
+        with _adapter_lock:
+            if _default_adapter is None:
+                _default_adapter = RiskAdapter(config_path, settings)
 
     return _default_adapter
