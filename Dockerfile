@@ -8,6 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Create non-root user
+RUN adduser --disabled-password --gecos "" appuser
+
 # Copy requirements first for better caching
 COPY requirements.txt .
 
@@ -27,6 +30,9 @@ ENV RISK_REDIS_PORT=6379
 ENV RISK_TIMESCALE_HOST=localhost
 ENV RISK_TIMESCALE_PORT=5432
 ENV RISK_LOG_LEVEL=INFO
+
+RUN chown -R appuser:appuser /app
+USER appuser
 
 # The risk engine is primarily used as a library imported by decision-engine
 # This CMD is for testing/debugging only
