@@ -62,33 +62,32 @@ class TestLoadFromRedis:
 
     def test_no_data_in_redis(self, manager):
         manager._redis = MagicMock()
+        manager._redis.hgetall.return_value = {}
         manager._redis.get.return_value = None
         state = manager._load_from_redis()
         assert len(state.positions) == 0
 
     def test_valid_portfolio_data(self, manager):
         manager._redis = MagicMock()
-        data = {
-            "positions": [
-                {
-                    "symbol": "AAPL",
-                    "quantity": 100,
-                    "average_buy_price": 150.0,
-                    "current_price": 160.0,
-                    "market_value": 16000.0,
-                    "unrealized_pnl": 1000.0,
-                    "unrealized_pnl_pct": 0.0667,
-                },
-            ],
-            "account": {
-                "buying_power": 10000.0,
-                "cash": 10000.0,
-                "total_equity": 26000.0,
-                "market_value": 16000.0,
-            },
-            "timestamp": "2026-02-20T10:00:00",
+        # Positions stored as Redis hash: {symbol: json_string}
+        manager._redis.hgetall.return_value = {
+            "AAPL": json.dumps({
+                "symbol": "AAPL",
+                "quantity": "100",
+                "average_buy_price": "150.0",
+                "equity": "16000.0",
+                "equity_change": "1000.0",
+                "percent_change": "6.67",
+            }),
         }
-        manager._redis.get.return_value = json.dumps(data)
+        # Account data stored as JSON string at robinhood:buying_power
+        manager._redis.get.return_value = json.dumps({
+            "buying_power": 10000.0,
+            "cash": 10000.0,
+            "total_equity": 26000.0,
+            "market_value": 16000.0,
+            "updated_at": "2026-02-20T10:00:00",
+        })
         state = manager._load_from_redis()
         assert "AAPL" in state.positions
         assert state.positions["AAPL"].shares == 100
@@ -99,34 +98,33 @@ class TestLoadFromRedis:
 
     def test_position_missing_symbol_skipped(self, manager):
         manager._redis = MagicMock()
-        data = {
-            "positions": [
-                {"quantity": 50, "current_price": 100.0},  # No symbol
-                {"symbol": "GOOG", "quantity": 25, "current_price": 200.0},
-            ],
-            "account": {},
+        manager._redis.hgetall.return_value = {
+            "NOSYM": json.dumps({"quantity": "50", "equity": "5000.0"}),  # No symbol key
+            "GOOG": json.dumps({
+                "symbol": "GOOG",
+                "quantity": "25",
+                "average_buy_price": "200.0",
+                "equity": "5000.0",
+            }),
         }
-        manager._redis.get.return_value = json.dumps(data)
+        manager._redis.get.return_value = None
         state = manager._load_from_redis()
         assert len(state.positions) == 1
         assert "GOOG" in state.positions
 
     def test_position_invalid_values(self, manager):
         manager._redis = MagicMock()
-        data = {
-            "positions": [
-                {"symbol": "BAD", "quantity": "not_a_number"},
-            ],
-            "account": {},
+        manager._redis.hgetall.return_value = {
+            "BAD": json.dumps({"symbol": "BAD", "quantity": "not_a_number"}),
         }
-        manager._redis.get.return_value = json.dumps(data)
+        manager._redis.get.return_value = None
         state = manager._load_from_redis()
         # Invalid parse → skipped
         assert len(state.positions) == 0
 
     def test_redis_error_returns_cache(self, manager):
         manager._redis = MagicMock()
-        manager._redis.get.side_effect = redis.RedisError("fail")
+        manager._redis.hgetall.side_effect = redis.RedisError("fail")
         cached = PortfolioState(buying_power=5000)
         manager._cache = cached
         state = manager._load_from_redis()
@@ -134,47 +132,44 @@ class TestLoadFromRedis:
 
     def test_redis_error_no_cache(self, manager):
         manager._redis = MagicMock()
-        manager._redis.get.side_effect = redis.RedisError("fail")
+        manager._redis.hgetall.side_effect = redis.RedisError("fail")
         state = manager._load_from_redis()
         assert isinstance(state, PortfolioState)
         assert len(state.positions) == 0
 
     def test_invalid_json(self, manager):
         manager._redis = MagicMock()
-        manager._redis.get.return_value = "not-json"
+        # hgetall returns dict with bad JSON values
+        manager._redis.hgetall.return_value = {"BAD": "not-json"}
+        manager._redis.get.return_value = None
         state = manager._load_from_redis()
         assert isinstance(state, PortfolioState)
+        assert len(state.positions) == 0
 
     def test_timestamp_with_z_suffix(self, manager):
         manager._redis = MagicMock()
-        data = {
-            "positions": [],
-            "account": {},
-            "timestamp": "2026-02-20T10:00:00Z",
-        }
-        manager._redis.get.return_value = json.dumps(data)
+        manager._redis.hgetall.return_value = {}
+        manager._redis.get.return_value = json.dumps({
+            "updated_at": "2026-02-20T10:00:00Z",
+        })
         state = manager._load_from_redis()
         assert state.last_updated is not None
 
     def test_invalid_timestamp(self, manager):
         manager._redis = MagicMock()
-        data = {
-            "positions": [],
-            "account": {},
-            "timestamp": "not-a-date",
-        }
-        manager._redis.get.return_value = json.dumps(data)
+        manager._redis.hgetall.return_value = {}
+        manager._redis.get.return_value = json.dumps({
+            "updated_at": "not-a-date",
+        })
         state = manager._load_from_redis()
         assert state.last_updated is None
 
     def test_last_updated_key(self, manager):
         manager._redis = MagicMock()
-        data = {
-            "positions": [],
-            "account": {},
-            "last_updated": "2026-01-15T08:30:00",
-        }
-        manager._redis.get.return_value = json.dumps(data)
+        manager._redis.hgetall.return_value = {}
+        manager._redis.get.return_value = json.dumps({
+            "updated_at": "2026-01-15T08:30:00",
+        })
         state = manager._load_from_redis()
         assert state.last_updated is not None
 
@@ -194,9 +189,9 @@ class TestGetPortfolioState:
 
     def test_force_refresh_ignores_cache(self, manager):
         manager._redis = MagicMock()
+        manager._redis.hgetall.return_value = {}
         manager._redis.get.return_value = json.dumps({
-            "positions": [],
-            "account": {"buying_power": 1234},
+            "buying_power": 1234,
         })
         manager._cache = PortfolioState(buying_power=9999)
         manager._cache_time = datetime.utcnow()
@@ -205,9 +200,9 @@ class TestGetPortfolioState:
 
     def test_refreshes_when_no_cache(self, manager):
         manager._redis = MagicMock()
+        manager._redis.hgetall.return_value = {}
         manager._redis.get.return_value = json.dumps({
-            "positions": [],
-            "account": {"buying_power": 5000},
+            "buying_power": 5000,
         })
         result = manager.get_portfolio_state()
         assert result.buying_power == 5000

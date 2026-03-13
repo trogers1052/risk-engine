@@ -84,18 +84,36 @@ class PortfolioStateManager:
         return state
 
     def _load_from_redis(self) -> PortfolioState:
-        """Load portfolio state from Redis."""
+        """Load portfolio state from Redis.
+
+        robinhood-sync stores positions as a Redis hash (one key per symbol)
+        at ``robinhood:positions`` and account data as a JSON string at
+        ``robinhood:buying_power``.  We read both and combine them into a
+        single PortfolioState.
+        """
         if not self._redis:
             logger.warning("Redis not connected, returning empty portfolio")
             return PortfolioState()
 
         try:
-            raw_data = self._redis.get(self.settings.redis_positions_key)
-            if not raw_data:
-                logger.debug("No portfolio data in Redis")
-                return PortfolioState()
+            # Read positions hash — each value is a JSON-encoded position
+            positions_hash = self._redis.hgetall(
+                self.settings.redis_positions_key
+            )
 
-            data = json.loads(raw_data)
+            # Read account-level data (buying power, cash, equity)
+            account_raw = self._redis.get("robinhood:buying_power")
+            account = json.loads(account_raw) if account_raw else {}
+
+            # Combine into the format _parse_portfolio_data expects
+            positions_list = []
+            for _symbol, pos_json in positions_hash.items():
+                try:
+                    positions_list.append(json.loads(pos_json))
+                except json.JSONDecodeError:
+                    logger.warning(f"Bad JSON for position {_symbol}")
+
+            data = {"positions": positions_list, "account": account}
             return self._parse_portfolio_data(data)
 
         except redis.RedisError as e:
@@ -109,35 +127,49 @@ class PortfolioStateManager:
         """Parse raw Redis data into PortfolioState."""
         positions = {}
 
-        # Parse positions array
+        # Parse positions array.
+        # Robinhood-sync stores: quantity, average_buy_price, equity,
+        # equity_change, percent_change.  Map to Position fields.
         for pos_data in data.get("positions", []):
             try:
                 symbol = pos_data.get("symbol")
                 if not symbol:
                     continue
 
+                shares = float(pos_data.get("quantity", 0))
+                avg_cost = float(pos_data.get("average_buy_price", 0))
+                market_value = float(pos_data.get("equity", 0))
+                current_price = (
+                    market_value / shares if shares > 0 else avg_cost
+                )
+                unrealized_pnl = float(
+                    pos_data.get("equity_change", 0)
+                )
+                # percent_change is stored as e.g. "-4.97" meaning -4.97%
+                unrealized_pnl_pct = (
+                    float(pos_data.get("percent_change", 0)) / 100.0
+                )
+
                 position = Position(
                     symbol=symbol,
-                    shares=float(pos_data.get("quantity", 0)),
-                    average_cost=float(pos_data.get("average_buy_price", 0)),
-                    current_price=float(pos_data.get("current_price", 0)),
-                    market_value=float(pos_data.get("market_value", 0)),
-                    unrealized_pnl=float(pos_data.get("unrealized_pnl", 0)),
-                    unrealized_pnl_pct=float(
-                        pos_data.get("unrealized_pnl_pct", 0)
-                    ),
+                    shares=shares,
+                    average_cost=avg_cost,
+                    current_price=current_price,
+                    market_value=market_value,
+                    unrealized_pnl=unrealized_pnl,
+                    unrealized_pnl_pct=unrealized_pnl_pct,
                 )
                 positions[symbol] = position
             except (ValueError, TypeError) as e:
-                logger.warning(f"Error parsing position: {e}")
+                logger.warning(f"Error parsing position {pos_data.get('symbol', '?')}: {e}")
                 continue
 
         # Parse account-level data
         account = data.get("account", {})
 
-        # Handle timestamp
+        # Handle timestamp (from account data)
         last_updated = None
-        ts_str = data.get("timestamp") or data.get("last_updated")
+        ts_str = account.get("updated_at") or data.get("timestamp")
         if ts_str:
             try:
                 last_updated = datetime.fromisoformat(
@@ -146,12 +178,19 @@ class PortfolioStateManager:
             except ValueError:
                 pass
 
+        total_equity = float(account.get("total_equity", 0))
+        cash = float(account.get("cash", 0))
+        # market_value = sum of position equities (or equity - cash)
+        market_value = float(account.get("market_value", 0))
+        if market_value == 0 and positions:
+            market_value = sum(p.market_value for p in positions.values())
+
         return PortfolioState(
             positions=positions,
             buying_power=float(account.get("buying_power", 0)),
-            cash=float(account.get("cash", 0)),
-            total_equity=float(account.get("total_equity", 0)),
-            market_value=float(account.get("market_value", 0)),
+            cash=cash,
+            total_equity=total_equity,
+            market_value=market_value,
             last_updated=last_updated,
         )
 
