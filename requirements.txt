@@ -12,7 +12,7 @@ scipy==1.17.1
 
 # Database
 psycopg2-binary==2.9.11
-redis==7.3.0
+redis==7.4.0
 
 # Kafka
 kafka-python==2.3.0
